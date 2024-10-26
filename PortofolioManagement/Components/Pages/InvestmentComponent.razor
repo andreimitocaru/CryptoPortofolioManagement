@@ -1,0 +1,213 @@
+﻿@page "/invest"
+@using PortofolioManagement.DTOs
+@using PortofolioManagement.DbModels
+@using PortofolioManagement.Services
+
+@rendermode InteractiveServer
+
+@inject PriceService PriceService
+@inject CryptocurrencyService CryptocurrencyService
+
+<h3>Investment Portfolio</h3>
+
+<EditForm Model="investmentInput" OnValidSubmit="HandleValidSubmit">
+    <DataAnnotationsValidator />
+    <ValidationSummary />
+
+    <div>
+        <label>Start Date:</label>
+        <InputDate @bind-Value="investmentInput.StartDate" Min="2024-01-01"/>
+    </div>
+
+    @if(investmentInput.AvailableCurrencies is not null)
+    {
+    <div>
+        <label>Select Cryptocurrency:</label>
+        <InputSelect @bind-Value="investmentInput.SelectedCurrencyId">
+            @foreach (var currency in investmentInput.AvailableCurrencies)
+            {
+                <option value="@currency.Id">@currency.Name</option>
+            }
+        </InputSelect>
+    </div>
+    }
+    <div>
+        <label>Investment Amount (EUR):</label>
+        <InputNumber @bind-Value="investmentInput.InvestmentAmount" />
+    </div>
+
+    <button type="submit">Add Investment</button>
+</EditForm>
+
+@if (showAlert)
+{
+    <div class="@alertClass alert" role="alert">
+        @alertMessage
+        <button class="btn-close" @onclick="DismissAlert">×</button>
+    </div>
+}
+
+@if ((Portfolio.Investments is not null) && (Portfolio.Investments.Any()))
+{
+<table class="table">
+    <thead>
+        <tr>
+            <th>Date</th>
+            <th>Cryptocurrency</th>
+            <th>Invested Amount</th>
+            <th>Crypto Amount</th>
+            <th>Current Value</th>
+            <th>ROI</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var data in allInvestmentData)
+        {
+            <tr>
+                <td>@data.Date.ToString("MMMM yyyy")</td>
+                <td>@Portfolio.Investments.First(i => i.InvestmentId == data.InvestmentId).Cryptocurrency.Name</td>
+                <td>@data.InvestedAmount.ToString("C")</td>
+                <td>@data.CryptoAmount</td>
+                <td>@data.CurrentValue.ToString("C")</td>
+                <td>@data.ROI.ToString("C")</td>
+            </tr>
+        }
+    </tbody>
+</table>
+}
+
+<h4>Total Invested Amount: @Portfolio.TotalInvestedAmount.ToString("C")</h4>
+<h4>Total Value Today: @Portfolio.TotalValueToday.ToString("C")</h4>
+<h4>Overall ROI: @Portfolio.ROI.ToString("P2")</h4>
+
+@code {
+    private Portfolio Portfolio = new Portfolio();
+
+    private InvestmentInput investmentInput = new InvestmentInput();
+    private List<MonthlyInvestmentData> allInvestmentData;
+
+    private string alertMessage;
+    private bool showAlert = false;
+    private string alertClass;
+    private int investmentId = 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var currencyList = await CryptocurrencyService.GetAvailableCryptocurrenciesAsync();
+        investmentInput.AvailableCurrencies = currencyList;
+        investmentInput.SelectedCurrency = currencyList[0];
+    }
+
+    private void UpdateSelectedCurrency(ChangeEventArgs e)
+    {
+        investmentInput.SelectedCurrencyId = int.Parse(e.Value.ToString());
+        investmentInput.SelectedCurrency = investmentInput.AvailableCurrencies
+            .FirstOrDefault(c => c.Id == investmentInput.SelectedCurrencyId);
+    }
+
+    private async Task HandleValidSubmit()
+    {
+        try
+        {
+            investmentId++;
+            var priceHistory = await PriceService.GetPriceHistoryAsync(investmentInput.SelectedCurrency.Name, investmentInput.StartDate);
+            var currencyAmount = investmentInput.InvestmentAmount / priceHistory.First().Price;
+            var investment = new Investment
+                {
+                    StartDate = investmentInput.StartDate,
+                    Cryptocurrency = investmentInput.SelectedCurrency,
+                    CryptoCurrencyId = investmentInput.SelectedCurrency.Id,
+                    Amount = currencyAmount,
+                    InvestedAmount = investmentInput.InvestmentAmount,
+                    ROI = CalculateROI(investmentInput, currencyAmount, priceHistory),
+                    InvestmentId = investmentId
+                };
+
+            Portfolio.Investments.Add(investment);
+            Portfolio.TotalValueToday += CalculatePortofolioTotalValue(investment, priceHistory);
+            allInvestmentData = await CalculateAllInvestmentsMonthlyDataAsync(Portfolio.Investments);
+
+            investmentInput.StartDate = DateTime.Now;
+            investmentInput.InvestmentAmount = 0;
+
+            alertMessage = "Investment added successfully!";
+            alertClass = "alert-success";
+        }
+        catch (Exception ex)
+        {
+            alertMessage = "There was an error processing your request";
+            alertClass = "alert-error";
+        }
+        finally
+        {
+            showAlert = true;
+        }
+    }
+
+    private decimal CalculateROI(InvestmentInput input, decimal amount, List<CryptoPriceHistory> priceHistoryList)
+    {
+        var actualValue = amount * priceHistoryList.Last().Price;
+
+        return (actualValue - input.InvestmentAmount) / input.InvestmentAmount;
+    }
+
+    private decimal CalculatePortofolioTotalValue(Investment investment, List<CryptoPriceHistory> priceHistoryList)
+    {
+        return investment.Amount * priceHistoryList.Where(x => x.CryptocurrencyId == investment.CryptoCurrencyId).Last().Price;
+    }
+
+    private void DismissAlert()
+    {
+        showAlert = false;
+    }
+
+    public async Task<List<MonthlyInvestmentData>> CalculateAllInvestmentsMonthlyDataAsync(List<Investment> investments)
+    {
+        var allMonthlyData = new List<MonthlyInvestmentData>();
+
+        foreach (var investment in investments)
+        {
+            // Call the individual investment calculation method
+            var monthlyDataForInvestment = await CalculateMonthlyROIForInvestmentAsync(investment);
+
+            allMonthlyData.AddRange(monthlyDataForInvestment);
+        }
+
+        return allMonthlyData;
+    }
+
+    private async Task<List<MonthlyInvestmentData>> CalculateMonthlyROIForInvestmentAsync(Investment investment)
+    {
+        var monthlyData = new List<MonthlyInvestmentData>();
+        var totalInvested = investment.InvestedAmount;
+        var currentDate = investment.StartDate;
+        var historicalPrice = investment.Cryptocurrency.PriceHistories
+                .FirstOrDefault(ph => ph.PriceDate.Date == currentDate.Date)?.Price;
+
+        var cryptoAmount = investment.InvestedAmount / historicalPrice.Value;
+
+        while (currentDate <= DateTime.Now)
+        {
+            var currentPrice = investment.Cryptocurrency.PriceHistories
+                .Where(ph => ph.PriceDate == currentDate)
+                .FirstOrDefault()?.Price ?? 0;
+
+            var currentValue = cryptoAmount * currentPrice;
+            var roi = currentValue - investment.InvestedAmount;
+
+            monthlyData.Add(new MonthlyInvestmentData
+                {
+                    InvestmentId = investment.InvestmentId,
+                    Date = currentDate,
+                    InvestedAmount = investment.InvestedAmount,
+                    CryptoAmount = cryptoAmount,
+                    CurrentValue = currentValue,
+                    ROI = roi
+                });
+
+            currentDate = currentDate.AddMonths(1);
+        }
+
+        return monthlyData;
+    }
+}
