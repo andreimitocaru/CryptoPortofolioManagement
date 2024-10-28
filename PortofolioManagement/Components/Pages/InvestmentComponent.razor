@@ -2,6 +2,7 @@
 @using PortofolioManagement.DTOs
 @using PortofolioManagement.DbModels
 @using PortofolioManagement.Services
+@using System.Globalization
 
 @rendermode InteractiveServer
 
@@ -66,10 +67,10 @@
             <tr>
                 <td>@data.Date.ToString("MMMM yyyy")</td>
                 <td>@Portfolio.Investments.First(i => i.InvestmentId == data.InvestmentId).Cryptocurrency.Name</td>
-                <td>@data.InvestedAmount.ToString("C")</td>
+                <td>@data.InvestedAmount.ToString("C", CultureInfo.CreateSpecificCulture("fr-FR"))</td>
                 <td>@data.CryptoAmount</td>
-                <td>@data.CurrentValue.ToString("C")</td>
-                <td>@data.ROI.ToString("C")</td>
+                <td>@data.CurrentValue.ToString("C", CultureInfo.CreateSpecificCulture("fr-FR"))</td>
+                <td>@data.ROI.ToString("C", CultureInfo.CreateSpecificCulture("fr-FR"))</td>
             </tr>
         }
     </tbody>
